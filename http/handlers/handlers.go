@@ -1,12 +1,14 @@
+/*
+	@author: Sushant
+*/
+
 package http_handler
 
 import (
-	"reflect"
-	"strings"
+	"encoding/json"
 
 	"github.com/gofiber/fiber/v2"
 	es "github.com/sushant102004/CatalogIQ/internal/elasticsearch"
-	catalog "github.com/sushant102004/CatalogIQ/model"
 )
 
 type HTTPHandler struct {
@@ -23,37 +25,82 @@ func NewHTTPHandler(es *es.ES) *HTTPHandler {
 func (h *HTTPHandler) HandleIndexData(ctx *fiber.Ctx) error {
 	// This function will first create indexes if doesn't exist and then index the data in all the created indexes
 
-	var body catalog.GroceryItem
+	var body interface{}
 
 	if err := ctx.BodyParser(&body); err != nil {
-		ctx.Status(400).JSON(
+		return ctx.Status(400).JSON(
 			map[string]string{
-				"error": err.Error(),
+				"message": "Invalid input data",
+				"error":   err.Error(),
 			},
 		)
-		return err
 	}
+
+	doc := body.(map[string]interface{})
 
 	indexes := []string{}
 
-	fields := reflect.TypeOf(body)
-
-	for i := 0; i < fields.NumField(); i++ {
-		field := fields.Field(i)
-		jsonTag := strings.Split(field.Tag.Get("json"), ",")[0]
-		indexes = append(indexes, jsonTag)
+	for k := range doc {
+		indexes = append(indexes, k)
 	}
 
 	if err := h.es.CreateIndex(indexes); err != nil {
-		ctx.Status(500).JSON(map[string]string{
+		return ctx.Status(500).JSON(map[string]string{
 			"error": err.Error(),
 		})
 	}
 
-	ctx.Status(200).JSON(
+	if err := h.es.IndexItem(indexes, body); err != nil {
+		return ctx.Status(500).JSON(map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	return ctx.Status(200).JSON(
 		map[string]string{
-			"message": "Indexes created successfully",
+			"message": "Data indexed successfully",
 		},
 	)
+}
+
+func (h *HTTPHandler) HandleSearchDocument(ctx *fiber.Ctx) error {
+	// Taking search query in query params for now
+
+	var body interface{}
+
+	if err := ctx.BodyParser(&body); err != nil {
+		return ctx.Status(400).JSON(
+			map[string]string{
+				"message": "Invalid input data",
+				"error":   err.Error(),
+			},
+		)
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return ctx.Status(400).JSON(
+			map[string]string{
+				"message": "Unable to marshal search query",
+				"error":   "Internal Server Error" + err.Error(),
+			},
+		)
+	}
+
+	resp, err := h.es.SearchDocument(string(bodyBytes))
+	if err != nil {
+		return ctx.Status(400).JSON(
+			map[string]string{
+				"message": "Unable to perform search",
+				"error":   "Internal Server Error" + err.Error(),
+			},
+		)
+	}
+
+	ctx.Status(200).JSON(map[string]interface{}{
+		"message": "Search Successfull",
+		"data":    resp,
+	})
+
 	return nil
 }
